@@ -1,6 +1,6 @@
 /*!
  * @file getAllPointData.ino
- * @brief Request and print one complete 48x32 single-peak frame.
+ * @brief Print a complete frame with pixel numbers and every configured peak.
  * @details ESP32 hardware UART example; see the connection table below.
  * @n Serial prints results; Serial1 connects to the sensor. UART is 8N1.
  * @copyright Copyright (c) 2026 DFRobot Co.Ltd (http://www.dfrobot.com)
@@ -21,7 +21,9 @@
 #include <DFRobot_TMF8829.h>
 #include <stdio.h>
 
-const DFRobot_TMF8829::eBaudRate_t sensorBaud = DFRobot_TMF8829::eBaudRate115200;
+const DFRobot_TMF8829::eBaudRate_t sensorBaud = DFRobot_TMF8829::eBaudRate921600;
+// Peaks per pixel: 8/16 presets support 1..4, 32 presets 1..3, 48 presets 1..2.
+const uint8_t PEAK_COUNT = 1;
 DFRobot_TMF8829 sensor(&Serial1, sensorBaud, /*RX pin*/25, /*TX pin*/26);
 // Point storage is managed automatically by the library.
 
@@ -33,11 +35,12 @@ void require(bool ok, const char *step)
   while (true) delay(1000);
 }
 
-void printPoint(uint16_t index, const DFRobot_TMF8829::sPoint_t &p)
+void printPoint(uint16_t pixel, uint8_t peak, const DFRobot_TMF8829::sPoint_t &p)
 {
   char row[80];
-  snprintf(row, sizeof(row), "%5u | %6d | %6d | %6d | %6u | %10u",
-           (unsigned int)index, (int)p.x, (int)p.y, (int)p.z,
+  snprintf(row, sizeof(row), "%5u | %4u | %6d | %6d | %6d | %6u | %10u",
+           (unsigned int)pixel, (unsigned int)peak,
+           (int)p.x, (int)p.y, (int)p.z,
            (unsigned int)p.signal, (unsigned int)p.confidence);
   Serial.println(row);
   // confidence=0 is preserved; apply your application's quality threshold here.
@@ -48,7 +51,7 @@ void setup()
   Serial.begin(115200);
   require(sensor.begin(), "begin: check wiring and current device baud");
   require(sensor.setSensorMode(DFRobot_TMF8829::eMode48X32), "48X32");
-  require(sensor.setPeakCount(1), "Peak=1");
+  require(sensor.setPeakCount(PEAK_COUNT), "setPeakCount");
   require(sensor.setMeasureMode(), "FRAME");
 }
 
@@ -64,11 +67,24 @@ void loop()
   Serial.print("Frame: ");
   Serial.print(frame.frameId);
   Serial.print("  New: ");
-  Serial.println(frame.isNew);
-  Serial.println(" Slot |  X(mm) |  Y(mm) |  Z(mm) | Signal | Confidence");
-  Serial.println("------+--------+--------+--------+--------+-----------");
-  for (uint16_t i = 0; i < frame.pointCount; ++i) {
-    printPoint(i, frame.points[i]);
+  Serial.print(frame.isNew);
+  Serial.print("  Size: ");
+  Serial.print(frame.width);
+  Serial.print("x");
+  Serial.print(frame.height);
+  Serial.print("  Peaks/pixel: ");
+  Serial.print(frame.peakCount);
+  Serial.print("  Points: ");
+  Serial.println(frame.pointCount);
+  // Pixel is row-major (row * width + column). Pixel and Peak are zero-based.
+  Serial.println("Pixel | Peak |  X(mm) |  Y(mm) |  Z(mm) | Signal | Confidence");
+  Serial.println("------+------+--------+--------+--------+--------+-----------");
+  const uint16_t pixelCount = uint16_t(frame.width) * frame.height;
+  for (uint16_t pixel = 0; pixel < pixelCount; ++pixel) {
+    for (uint8_t peak = 0; peak < frame.peakCount; ++peak) {
+      const uint16_t index = pixel * frame.peakCount + peak;
+      printPoint(pixel, peak, frame.points[index]);
+    }
   }
   delay(500);
 }

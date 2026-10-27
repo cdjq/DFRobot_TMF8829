@@ -24,6 +24,8 @@
 #include <DFRobot_TMF8829.h>
 #include <stdio.h>
 
+// Peaks per pixel in the default 8X8 mode: 1..4.
+const uint8_t PEAK_COUNT = 1;
 DFRobot_TMF8829 sensor(&Serial1, DFRobot_TMF8829::eBaudRate115200, /*RX pin*/25, /*TX pin*/26);
 
 void require(bool ok, const char *step)
@@ -49,7 +51,7 @@ void setup()
   Serial.begin(115200);
   require(sensor.begin(), "begin: check wiring and current device baud");
   require(sensor.setSensorMode(DFRobot_TMF8829::eMode8X8), "8X8");
-  require(sensor.setPeakCount(1), "Peak=1");
+  require(sensor.setPeakCount(PEAK_COUNT), "setPeakCount");
   require(sensor.setMeasureMode(LINE_Y), "LINE selection");
 }
 
@@ -63,7 +65,16 @@ void loop()
   const DFRobot_TMF8829::sFrame_t &frame = sensor.getAllPointData();
   Serial.println();
   Serial.print("Frame: ");
-  Serial.println(frame.frameId);
+  Serial.print(frame.frameId);
+  Serial.print("  Row: ");
+  Serial.print(LINE_Y);
+  Serial.print("  Width: ");
+  Serial.print(frame.width);
+  Serial.print("  Peaks/pixel: ");
+  Serial.print(frame.peakCount);
+  Serial.print("  Points: ");
+  Serial.println(frame.pointCount);
+  // Col and Peak are zero-based.
   Serial.println(" Col | Peak |  X(mm) |  Y(mm) |  Z(mm) | Signal | Confidence");
   Serial.println("-----+------+--------+--------+--------+--------+-----------");
   for (uint8_t x = 0; x < frame.width; ++x) {
