@@ -1,0 +1,32 @@
+# Syntax Coloring Map for DFRobot_TMF8829
+
+# Datatypes (KEYWORD1)
+DFRobot_TMF8829	KEYWORD1
+eMeasurementMode_t	KEYWORD1
+eOutputMode_t	KEYWORD1
+eBaudRate_t	KEYWORD1
+sPoint_t	KEYWORD1
+sFrame_t	KEYWORD1
+sConfig_t	KEYWORD1
+
+# Methods and Functions (KEYWORD2)
+setFrameBuffer	KEYWORD2
+begin	KEYWORD2
+getConfig	KEYWORD2
+setSensorMode	KEYWORD2
+setPeakCount	KEYWORD2
+setMeasureMode	KEYWORD2
+getBaudRate	KEYWORD2
+setBaudRate	KEYWORD2
+saveConfig	KEYWORD2
+update	KEYWORD2
+getAllPointData	KEYWORD2
+getPointData	KEYWORD2
+isDataNew	KEYWORD2
+isDataValid	KEYWORD2
+
+# Constants (LITERAL1)
+TMF8829_AT_TIMEOUT	LITERAL1
+TMF8829_CONFIG_TIMEOUT	LITERAL1
+TMF8829_MAX_POINTS	LITERAL1
+TMF8829_POINT_BYTES	LITERAL1
