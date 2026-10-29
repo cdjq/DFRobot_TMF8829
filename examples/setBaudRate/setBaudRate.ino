@@ -20,7 +20,7 @@
 // VCC: 3.3V; UART pins use the module logic level.
 #include <DFRobot_TMF8829.h>
 
-DFRobot_TMF8829 sensor(&Serial1, DFRobot_TMF8829::eBaudRate115200, /*RX pin*/25, /*TX pin*/26);
+DFRobot_TMF8829 tmf8829(&Serial1, DFRobot_TMF8829::eBaudRate115200, /*RX pin*/25, /*TX pin*/26);
 
 void require(bool ok, const char *step)
 {
@@ -33,16 +33,16 @@ void require(bool ok, const char *step)
 void setup()
 {
   Serial.begin(115200);
-  require(sensor.begin(), "begin: check wiring and current device baud");
-  require(sensor.setSensorMode(DFRobot_TMF8829::eMode8X8), "8X8");
-  require(sensor.setPeakCount(1), "Peak=1");
-  require(sensor.setMeasureMode(3, 4), "POINT");
-  require(sensor.setBaudRate(DFRobot_TMF8829::eBaudRate115200), "BAUD: reconnect at known rate if failed");
+  require(tmf8829.begin(), "begin: check wiring and current device baud");
+  require(tmf8829.setSensorMode(DFRobot_TMF8829::eMode8X8), "8X8");
+  require(tmf8829.setPeakCount(1), "Peak=1");
+  require(tmf8829.setMeasureMode(3, 4), "POINT");
+  require(tmf8829.setBaudRate(DFRobot_TMF8829::eBaudRate115200), "BAUD: reconnect at known rate if failed");
   DFRobot_TMF8829::eBaudRate_t rate;
-  require(sensor.getBaudRate(rate), "BAUD?");
+  require(tmf8829.getBaudRate(rate), "BAUD?");
   Serial.print("Verified baud=");
   Serial.println(uint32_t(rate));
-  // Optional: require(sensor.saveConfig(), "SAVE");
+  // Optional: require(tmf8829.saveConfig(), "SAVE");
   // After saving, use the same baud rate in the constructor on the next power-on.
   // Failure can leave host/device unsynchronized; recreate at the known device rate.
 }

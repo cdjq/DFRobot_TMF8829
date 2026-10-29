@@ -88,19 +88,19 @@ int main() {
     Device device;
     device.port.begin(115200);
     device.baud = 2000000;
-    Sensor sensor(&device.port, Sensor::eBaudRate2000000, 25, 26);
-    assert(sensor.begin());
+    Sensor tmf8829(&device.port, Sensor::eBaudRate2000000, 25, 26);
+    assert(tmf8829.begin());
     assert(device.port.beginCount == 2);
     assert(device.port.rxBufferSize == 32768);
     assert(device.port.rxPin == 25 && device.port.txPin == 26);
-    assert(sensor.begin());
+    assert(tmf8829.begin());
     assert(device.port.beginCount == 3);
   }
   {
     Device device;
     device.port.failResize = true;
-    Sensor sensor(&device.port);
-    assert(!sensor.begin());
+    Sensor tmf8829(&device.port);
+    assert(!tmf8829.begin());
     assert(device.port.commands.empty());
     assert(!device.port.running);
   }
@@ -109,45 +109,45 @@ int main() {
   for (int failures=0; failures<=3; ++failures) {
     Device retry;
     retry.reportErrors=failures;
-    Sensor sensor(&retry.port);
+    Sensor tmf8829(&retry.port);
     Sensor::sPoint_t buffer[1];
-    assert(sensor.setFrameBuffer(buffer,1));
-    assert(sensor.begin()==(failures<3));
+    assert(tmf8829.setFrameBuffer(buffer,1));
+    assert(tmf8829.begin()==(failures<3));
     assert(retry.reportAttempts==std::min(failures+1,3));
   }
   for (int failures : {1,3}) {
     Device retry;
     retry.reportTimeouts=failures;
-    Sensor sensor(&retry.port);
+    Sensor tmf8829(&retry.port);
     Sensor::sPoint_t buffer[1];
-    assert(sensor.setFrameBuffer(buffer,1));
-    assert(sensor.begin()==(failures<3));
+    assert(tmf8829.setFrameBuffer(buffer,1));
+    assert(tmf8829.begin()==(failures<3));
     assert(retry.reportAttempts==std::min(failures+1,3));
   }
   // Default storage supports every preset and peak count without user arrays.
   Device automatic;
   Sensor::sPoint_t borrowed[4];
   {
-    Sensor sensor(&automatic.port);
-    assert(sensor.begin());
+    Sensor tmf8829(&automatic.port);
+    assert(tmf8829.begin());
     for (int mode=0; mode<9; ++mode) {
-      assert(sensor.setSensorMode(Sensor::eMeasurementMode_t(mode)));
-      assert(sensor.setPeakCount(automatic.width()==48?2:automatic.width()==32?3:4));
-      assert(sensor.update()); checkPoints(sensor);
+      assert(tmf8829.setSensorMode(Sensor::eMeasurementMode_t(mode)));
+      assert(tmf8829.setPeakCount(automatic.width()==48?2:automatic.width()==32?3:4));
+      assert(tmf8829.update()); checkPoints(tmf8829);
     }
-    const auto *storage=sensor.getAllPointData().points;
-    assert(sensor.begin());
-    assert(sensor.update()); checkPoints(sensor);
-    assert(sensor.getAllPointData().points==storage);
-    assert(sensor.setMeasureMode(0,0));
-    assert(sensor.setFrameBuffer(borrowed,4));
-    assert(sensor.update()); checkPoints(sensor);
-    assert(sensor.getAllPointData().points==borrowed);
+    const auto *storage=tmf8829.getAllPointData().points;
+    assert(tmf8829.begin());
+    assert(tmf8829.update()); checkPoints(tmf8829);
+    assert(tmf8829.getAllPointData().points==storage);
+    assert(tmf8829.setMeasureMode(0,0));
+    assert(tmf8829.setFrameBuffer(borrowed,4));
+    assert(tmf8829.update()); checkPoints(tmf8829);
+    assert(tmf8829.getAllPointData().points==borrowed);
   } // Destruction must not free borrowed storage.
   borrowed[0].x=42;
   {
-    Sensor sensor(&automatic.port);
-    assert(sensor.begin() && sensor.update()); checkPoints(sensor);
+    Sensor tmf8829(&automatic.port);
+    assert(tmf8829.begin() && tmf8829.update()); checkPoints(tmf8829);
   } // Destruction releases automatic storage.
   Device d;
   struct { uint32_t before; Sensor::sPoint_t p[3072]; uint32_t after; } mem;

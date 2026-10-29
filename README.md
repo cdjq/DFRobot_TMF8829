@@ -2,7 +2,7 @@
 
 - [中文版](./README_CN.md)
 
-Arduino driver for the TMF8829 module firmware specified in task.md. The host uses hardware UART request/response to acquire XYZ point clouds, select measurement presets and peaks, choose point/line/frame output, and explicitly save configuration.
+Arduino driver for the TMF8829 point cloud sensor module. The host uses hardware UART request/response to acquire XYZ point clouds, select measurement presets and peaks, choose point/line/frame output, and explicitly save configuration.
 
 ## Product Link
 
@@ -15,6 +15,8 @@ SKU, product URL, supply/UART voltage, images, final maintainer and repository U
 * [Installation](#installation)
 
 * [Wiring](#wiring)
+
+* [AT Commands](#at-commands)
 
 * [Data and Memory](#data-and-memory)
 
@@ -54,6 +56,102 @@ SKU, product URL, supply/UART voltage, images, final maintainer and repository U
 
 Confirm module supply and UART levels before connecting. Examples use Serial for the debug console and Serial1 for the sensor; change host pins in the constructor as needed.
 
+
+## AT Commands
+
+### Power-on defaults
+
+When Flash contains no valid saved configuration, the module starts with the following defaults. Otherwise, it restores the saved configuration.
+
+| Setting | Default |
+| --- | --- |
+| Measurement mode | `48X32`, normal mode |
+| Measurement period | `66 ms`, approximately 15 frames/s |
+| Peak count | `1` |
+| Output selection | `FRAME`, full frame |
+| Automatic reporting | Disabled (`REPORT=0`) |
+| Signal strength data | Enabled |
+| Noise data | Disabled |
+| Crosstalk data | Disabled |
+| UART baud rate | `921600` |
+| UART format | 8 data bits, no parity, 1 stop bit (8N1) |
+
+The library constructor still defaults to `115200`. Pass `eBaudRate921600` explicitly when connecting to a module using the power-on defaults above.
+
+### Command format and functions
+
+The module accepts case-sensitive ASCII commands over UART (8N1, no hardware flow control). Do not insert spaces in commands or parameters. Terminate each command with `\r\n` (CRLF); the library appends this automatically. A command must be shorter than 128 bytes. Send commands one at a time and wait for each complete response.
+
+Successful text commands return `\r\nOK\r\n`; unknown commands, invalid parameters or execution failures return `\r\nERROR\r\n`. Queries return field lines followed by `OK`. A successful `AT+GETFRAME` returns a binary frame without a trailing `OK`.
+
+| Command | Parameters and behavior | Library API |
+| --- | --- | --- |
+| `AT` | Check communication; returns `OK`. | Used by `begin()` |
+| `AT+CONFIG?` | Query MODE, PEAK, REPORT, SELECT, X, Y and BAUD. | `getConfig()` |
+| `AT+MODE=<mode>` | Select a measurement preset from the table below. | `setSensorMode()` |
+| `AT+PEAK=<count>` | Peaks per pixel, starting at 1; maximum depends on the preset. | `setPeakCount()` |
+| `AT+REPORT=<mode>` | `0`: request/response; `1`: firmware automatic reporting. Measurement continues in either mode. | `begin()` forces `0`; the library only supports request/response |
+| `AT+GETFRAME` | Request the next complete XYZ frame in request/response mode. Returns `ERROR` if busy or automatic reporting is enabled. | `update()` |
+| `AT+POINT=<x>,<y>` | Select a zero-based column and row in the original image; output is 1×1 with all peaks. Out-of-range indices return `ERROR`. | `setMeasureMode(x, y)` |
+| `AT+LINE=<y>` | Select a zero-based original row; output is preset width × 1 with all peaks. Out-of-range indices return `ERROR`. | `setMeasureMode(y)` |
+| `AT+FRAME` | Restore full-image output at the current preset, retaining the peak count. | `setMeasureMode()` |
+| `AT+BAUD?` | Return `+BAUD:<rate>`, followed by `OK`. | `getBaudRate()` |
+| `AT+BAUD=<rate>` | Set the UART rate using one of the integer values below. | `setBaudRate()` |
+| `AT+SAVE` | Save MODE, PEAK, REPORT, SELECT, X, Y and BAUD to NVS for restoration at power-on. | `saveConfig()` |
+
+### Measurement presets and peak limits
+
+| `<mode>` | Width × height | Maximum `<count>` |
+| --- | --- | --- |
+| `8X8` | 8×8 | 4 |
+| `16X16` | 16×16 | 4 |
+| `32X32` | 32×32 | 3 |
+| `48X32` | 48×32 | 2 |
+| `H_8X8` | 8×8 | 4 |
+| `H_16X16` | 16×16 | 4 |
+| `H_32X32` | 32×32 | 3 |
+| `H_48X32` | 48×32 | 2 |
+| `L_8X8` | 8×8 | 4 |
+
+Switching successfully to a different preset resets PEAK to 1 and selection to FRAME. Selecting the current preset does not perform these resets. Configure the preset before setting the peak count and point/line selection.
+
+### Configuration query example
+
+Send `AT+CONFIG?\r\n`. An example response is shown below; each line ends in CRLF and field order may vary:
+
+```text
++CONFIG:MODE=48X32
++CONFIG:PEAK=1
++CONFIG:REPORT=0
++CONFIG:SELECT=FRAME
++CONFIG:X=-1
++CONFIG:Y=-1
++CONFIG:BAUD=921600
+OK
+```
+
+SELECT is `FRAME`, `LINE` or `POINT`. FRAME reports X=Y=-1; LINE reports X=-1 and Y as the selected row; POINT reports the selected original column and row. POINT/LINE do not translate XYZ coordinates, and their binary frames do not carry the original selection indices.
+
+### Requesting data, changing baud rate and saving
+
+For example, send the following commands in order, appending CRLF and waiting for each response:
+
+```text
+AT
+AT+REPORT=0
+AT+MODE=48X32
+AT+PEAK=2
+AT+FRAME
+AT+GETFRAME
+```
+
+The first five commands return `OK`; GETFRAME returns a binary XYZ frame beginning with `AA 55` and ending with `55 AA`. Each point contains little-endian int16 x/y/z (mm), uint16 signal and uint8 confidence (9 bytes total). Use `update()` to receive and validate a frame, then read the cached points with the getters. Wait until the current frame transaction finishes before sending another command; do not read the same UART manually while using the library.
+
+Allowed baud rates are `115200`, `460800`, `921600`, `1000000`, `2000000`, `3000000`, `4000000` and `5000000`; abbreviations such as `1M` are invalid. The library constructor defaults to **115200**, while the referenced firmware defaults to **921600** without a saved configuration. Pass the module's actual current rate to the constructor; the library does not scan rates.
+
+To change baud rate manually, finish any pending frame, send `AT+REPORT=0` and wait for `OK`, then send e.g. `AT+BAUD=921600` at the old rate. Wait for the complete old-rate `OK`, switch the host UART to 921600, and verify with `AT` and `AT+BAUD?`. `setBaudRate()` performs this rate switch and verification for library users.
+
+Settings take effect without an automatic NVS write. Send `AT+SAVE` only when persistence is required; no restart is needed to apply the current settings. After saving a new baud rate, use that rate at the next power-on. Avoid repeatedly saving in `loop()`.
 
 ## Data and Memory
 
@@ -278,18 +376,18 @@ Complete public API, copied from the header:
 ## Compatibility
 
 | Board | Work Well | Work Wrong | Untested | Remarks |
-| --- | --- | --- | --- | --- |
-| ESP32 | | | ? | Hardware untested; see validation notes below. |
-
-
-See tests/host/README.md for software validation. Compilation and simulated protocol tests do not establish hardware compatibility. Other boards need a hardware UART, enough RAM and accurate baud support; UNO/SoftwareSerial is unverified.
+| ------------ | :--: | :----: | :----: | ---- |
+| Mega2560 | | | √ | |
+| Leonardo | | | √ | |
+| ESP32 | | | √ | |
+| ESP8266 | | | √ | |
 
 
 ## History
 
-* 2026/10/23 - V1.0.0 version
+- 2026/09/03 - V1.0.0 version
 
 
 ## Credits
 
-Written by cdjq, 2026. Final maintainer and contact await confirmation. [DFRobot](https://www.dfrobot.com/)
+Written by PLELES(li.jia@dfrobot.com), 2026. (Welcome to our [website](https://www.dfrobot.com/))

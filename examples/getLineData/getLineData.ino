@@ -26,7 +26,7 @@
 
 // Peaks per pixel in the default 8X8 mode: 1..4.
 const uint8_t PEAK_COUNT = 1;
-DFRobot_TMF8829 sensor(&Serial1, DFRobot_TMF8829::eBaudRate115200, /*RX pin*/25, /*TX pin*/26);
+DFRobot_TMF8829 tmf8829(&Serial1, DFRobot_TMF8829::eBaudRate115200, /*RX pin*/25, /*TX pin*/26);
 
 void require(bool ok, const char *step)
 {
@@ -49,20 +49,20 @@ void printPoint(uint8_t x, uint8_t peak, const DFRobot_TMF8829::sPoint_t &p)
 void setup()
 {
   Serial.begin(115200);
-  require(sensor.begin(), "begin: check wiring and current device baud");
-  require(sensor.setSensorMode(DFRobot_TMF8829::eMode8X8), "8X8");
-  require(sensor.setPeakCount(PEAK_COUNT), "setPeakCount");
-  require(sensor.setMeasureMode(LINE_Y), "LINE selection");
+  require(tmf8829.begin(), "begin: check wiring and current device baud");
+  require(tmf8829.setSensorMode(DFRobot_TMF8829::eMode8X8), "8X8");
+  require(tmf8829.setPeakCount(PEAK_COUNT), "setPeakCount");
+  require(tmf8829.setMeasureMode(LINE_Y), "LINE selection");
 }
 
 void loop()
 {
-  if (!sensor.update()) {
+  if (!tmf8829.update()) {
     Serial.println("Frame unavailable");
     delay(500);
     return;
   }
-  const DFRobot_TMF8829::sFrame_t &frame = sensor.getAllPointData();
+  const DFRobot_TMF8829::sFrame_t &frame = tmf8829.getAllPointData();
   Serial.println();
   Serial.print("Frame: ");
   Serial.print(frame.frameId);
@@ -80,7 +80,7 @@ void loop()
   for (uint8_t x = 0; x < frame.width; ++x) {
     for (uint8_t peak = 0; peak < frame.peakCount; ++peak) {
       DFRobot_TMF8829::sPoint_t point;
-      require(sensor.getPointData(x, 0, peak, point), "local line point");
+      require(tmf8829.getPointData(x, 0, peak, point), "local line point");
       printPoint(x, peak, point);
     }
   }
