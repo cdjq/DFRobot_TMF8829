@@ -38,7 +38,17 @@ public:
   void end() { running = false; }
   void flush() {}
   int available() { return int(rx.size()); }
-  int read() { if (rx.empty()) return -1; int b = rx.front(); rx.pop_front(); return b; }
+  int read() { ++singleReads; if (rx.empty()) return -1; int b = rx.front(); rx.pop_front(); return b; }
+  size_t bulkReads = 0;
+  size_t singleReads = 0;
+  size_t maxBulkRead = 0;
+  size_t readBytes(char *p, size_t n) {
+    ++bulkReads;
+    size_t count = n < rx.size() ? n : rx.size();
+    if (count > maxBulkRead) maxBulkRead = count;
+    for (size_t i = 0; i < count; ++i) { p[i] = char(rx.front()); rx.pop_front(); }
+    return count;
+  }
   size_t write(const uint8_t *p, size_t n) {
     for (size_t i = 0; i < n; ++i) {
       tx += char(p[i]);

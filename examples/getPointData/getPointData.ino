@@ -2,6 +2,7 @@
  * @file getPointData.ino
  * @brief Select a pixel using POINT_X/POINT_Y; read all peaks at local (0,0).
  * @details ESP32 hardware UART example; see the connection table below.
+ * @n Starts at 921600 baud; use the module current saved rate if different.
  * @n Serial prints results; Serial1 connects to the sensor. UART is 8N1.
  * @copyright Copyright (c) 2026 DFRobot Co.Ltd (http://www.dfrobot.com)
  * @license The MIT License (MIT)
@@ -27,7 +28,7 @@
 
 // Peaks per pixel in the default 8X8 mode: 1..4.
 const uint8_t PEAK_COUNT = 1;
-DFRobot_TMF8829 tmf8829(&Serial1, DFRobot_TMF8829::eBaudRate115200, /*RX pin*/25, /*TX pin*/26);
+DFRobot_TMF8829 tmf8829(&Serial1, eBaudRate921600, /*RX pin*/25, /*TX pin*/26);
 
 void require(bool ok, const char *step)
 {
@@ -37,7 +38,7 @@ void require(bool ok, const char *step)
   while (true) delay(1000);
 }
 
-void printPoint(uint16_t index, const DFRobot_TMF8829::sPoint_t &p)
+void printPoint(uint16_t index, const sPoint_t &p)
 {
   char row[80];
   snprintf(row, sizeof(row), "%5u | %6d | %6d | %6d | %6u | %10u",
@@ -50,10 +51,15 @@ void printPoint(uint16_t index, const DFRobot_TMF8829::sPoint_t &p)
 void setup()
 {
   Serial.begin(115200);
-  require(tmf8829.begin(), "begin: check wiring and current device baud");
-  require(tmf8829.setSensorMode(DFRobot_TMF8829::eMode8X8), "8X8");
+  if (!tmf8829.begin()) {
+    Serial.println("Sensor init failed, check TX/RX wiring, power supply and baud rate");
+    while (true) delay(1000);
+  }
+  Serial.println("Sensor init Success");
+  require(tmf8829.setSensorMode(eMode8X8), "8X8");
   require(tmf8829.setPeakCount(PEAK_COUNT), "setPeakCount");
   require(tmf8829.setMeasureMode(POINT_X, POINT_Y), "POINT selection");
+  delay(1000);
 }
 
 void loop()
@@ -63,7 +69,7 @@ void loop()
     delay(500);
     return;
   }
-  const DFRobot_TMF8829::sFrame_t &frame = tmf8829.getAllPointData();
+  const sFrame_t &frame = tmf8829.getAllPointData();
   Serial.println();
   Serial.print("Frame: ");
   Serial.print(frame.frameId);
@@ -79,7 +85,7 @@ void loop()
   Serial.println(" Peak |  X(mm) |  Y(mm) |  Z(mm) | Signal | Confidence");
   Serial.println("------+--------+--------+--------+--------+-----------");
   for (uint8_t peak = 0; peak < frame.peakCount; ++peak) {
-    DFRobot_TMF8829::sPoint_t point;
+    sPoint_t point;
     require(tmf8829.getPointData(0, 0, peak, point), "local point");
     printPoint(peak, point);
   }

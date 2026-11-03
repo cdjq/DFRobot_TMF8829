@@ -22,84 +22,100 @@
 #define TMF8829_MAX_POINTS       3072UL   ///< Maximum legal XYZ slots in supported modes
 #define TMF8829_POINT_BYTES      9UL      ///< Bytes per wire-format XYZ slot
 
+/** @enum eMeasurementMode_t
+ *  @brief Measurement presets; mapped explicitly to firmware strings.
+ */
+typedef enum {
+  eMode8X8 = 0,    /**< 8 by 8, at most 4 peaks */
+  eMode16X16,      /**< 16 by 16, at most 4 peaks */
+  eMode32X32,      /**< 32 by 32, at most 3 peaks */
+  eMode48X32,      /**< 48 by 32, at most 2 peaks */
+  eModeH8X8,       /**< H_8X8 preset, at most 4 peaks */
+  eModeH16X16,     /**< H_16X16 preset, at most 4 peaks */
+  eModeH32X32,     /**< H_32X32 preset, at most 3 peaks */
+  eModeH48X32,     /**< H_48X32 preset, at most 2 peaks */
+  eModeL8X8        /**< L_8X8 preset, at most 4 peaks */
+} eMeasurementMode_t;
+
+/** @enum eOutputMode_t
+ *  @brief Spatial output selection, independent of measurement preset.
+ */
+typedef enum {
+  eOutputFrame = 0, /**< Full image */
+  eOutputPoint = 1, /**< Selected pixel, all peaks */
+  eOutputLine = 2   /**< Selected row, all peaks */
+} eOutputMode_t;
+
+/** @enum eBaudRate_t
+ *  @brief Supported UART baud rates, represented by their actual values.
+ */
+typedef enum : uint32_t {
+  eBaudRate115200  = 115200UL,  /**< 115200 baud */
+  eBaudRate460800  = 460800UL,  /**< 460800 baud */
+  eBaudRate921600  = 921600UL,  /**< 921600 baud, firmware default */
+  eBaudRate1000000 = 1000000UL, /**< 1000000 baud */
+  eBaudRate2000000 = 2000000UL, /**< 2000000 baud */
+  eBaudRate3000000 = 3000000UL, /**< 3000000 baud */
+  eBaudRate4000000 = 4000000UL, /**< 4000000 baud */
+  eBaudRate5000000 = 5000000UL  /**< 5000000 baud */
+} eBaudRate_t;
+
+/** @struct sPoint_t
+ *  @brief One XYZ slot; native sizeof may exceed the nine wire bytes.
+ */
+typedef struct {
+  int16_t  x;          /**< X in mm */
+  int16_t  y;          /**< Y in mm */
+  int16_t  z;          /**< Z in mm */
+  uint16_t signal;     /**< Raw signal; zero is preserved */
+  uint8_t  confidence; /**< Raw confidence; zero slots are preserved */
+} sPoint_t;
+
+/** @struct sFrame_t
+ *  @brief Validated frame metadata and borrowed point storage.
+ */
+typedef struct {
+  uint8_t         width;      /**< Output-local width */
+  uint8_t         height;     /**< Output-local height */
+  uint8_t         peakCount;  /**< Slots per pixel */
+  uint32_t        frameId;    /**< Acquisition sequence, may wrap */
+  uint16_t        pointCount; /**< width * height * peakCount when valid */
+  const sPoint_t *points;     /**< Borrowed array managed by the sensor object */
+  bool            isNew;      /**< ID differs from last successful frame */
+  bool            valid;      /**< Complete protocol validation passed */
+} sFrame_t;
+
+/** @struct sConfig_t
+ *  @brief Actual firmware configuration returned by CONFIG?.
+ */
+typedef struct {
+  eMeasurementMode_t mode;       /**< Resolution/preset */
+  uint8_t            peakCount;  /**< One to preset maximum */
+  uint8_t            reportMode; /**< Raw REPORT field; operation requires zero */
+  eOutputMode_t      outputMode; /**< FRAME, POINT or LINE */
+  int16_t            x;          /**< Original pixel column, otherwise -1 */
+  int16_t            y;          /**< Original row, otherwise -1 */
+  eBaudRate_t        baudRate;   /**< Validated supported rate */
+} sConfig_t;
+
+/** @struct sTiming_t
+ *  @brief Latest update timings in microseconds; no serial printing inside the driver.
+ */
+typedef struct {
+  uint32_t prepareUs;       /**< Entry to request start, including recovery/config queries */
+  uint32_t waitFirstByteUs; /**< Request start to first byte read, or elapsed wait if no byte arrived */
+  uint32_t receiveUs;       /**< First byte read to frame publication, or failure */
+  uint32_t totalUs;         /**< Complete update duration, excluding caller printing */
+  uint8_t firstByte;        /**< First byte read; valid only if receivedFirstByte */
+  uint8_t secondByte;       /**< Second byte read; valid only if receivedSecondByte */
+  bool receivedSecondByte; /**< At least two bytes were read after the request */
+  bool requestStarted;     /**< GETFRAME send was attempted */
+  bool receivedFirstByte;  /**< At least one byte was read after the request */
+  bool frameComplete;      /**< A valid frame was published */
+} sTiming_t;
+
 class DFRobot_TMF8829 {
 public:
-  /** @enum eMeasurementMode_t
-   *  @brief Measurement presets; mapped explicitly to firmware strings.
-   */
-  typedef enum {
-    eMode8X8 = 0,    /**< 8 by 8, at most 4 peaks */
-    eMode16X16,      /**< 16 by 16, at most 4 peaks */
-    eMode32X32,      /**< 32 by 32, at most 3 peaks */
-    eMode48X32,      /**< 48 by 32, at most 2 peaks */
-    eModeH8X8,       /**< H_8X8 preset, at most 4 peaks */
-    eModeH16X16,     /**< H_16X16 preset, at most 4 peaks */
-    eModeH32X32,     /**< H_32X32 preset, at most 3 peaks */
-    eModeH48X32,     /**< H_48X32 preset, at most 2 peaks */
-    eModeL8X8        /**< L_8X8 preset, at most 4 peaks */
-  } eMeasurementMode_t;
-
-  /** @enum eOutputMode_t
-   *  @brief Spatial output selection, independent of measurement preset.
-   */
-  typedef enum {
-    eOutputFrame = 0, /**< Full image */
-    eOutputPoint = 1, /**< Selected pixel, all peaks */
-    eOutputLine = 2   /**< Selected row, all peaks */
-  } eOutputMode_t;
-
-  /** @enum eBaudRate_t
-   *  @brief Supported UART baud rates, represented by their actual values.
-   */
-  typedef enum : uint32_t {
-    eBaudRate115200  = 115200UL,  /**< 115200 baud */
-    eBaudRate460800  = 460800UL,  /**< 460800 baud */
-    eBaudRate921600  = 921600UL,  /**< 921600 baud, firmware default */
-    eBaudRate1000000 = 1000000UL, /**< 1000000 baud */
-    eBaudRate2000000 = 2000000UL, /**< 2000000 baud */
-    eBaudRate3000000 = 3000000UL, /**< 3000000 baud */
-    eBaudRate4000000 = 4000000UL, /**< 4000000 baud */
-    eBaudRate5000000 = 5000000UL  /**< 5000000 baud */
-  } eBaudRate_t;
-
-  /** @struct sPoint_t
-   *  @brief One XYZ slot; native sizeof may exceed the nine wire bytes.
-   */
-  typedef struct {
-    int16_t  x;          /**< X in mm */
-    int16_t  y;          /**< Y in mm */
-    int16_t  z;          /**< Z in mm */
-    uint16_t signal;     /**< Raw signal; zero is preserved */
-    uint8_t  confidence; /**< Raw confidence; zero slots are preserved */
-  } sPoint_t;
-
-  /** @struct sFrame_t
-   *  @brief Validated frame metadata and borrowed point storage.
-   */
-  typedef struct {
-    uint8_t         width;      /**< Output-local width */
-    uint8_t         height;     /**< Output-local height */
-    uint8_t         peakCount;  /**< Slots per pixel */
-    uint32_t        frameId;    /**< Acquisition sequence, may wrap */
-    uint16_t        pointCount; /**< width * height * peakCount when valid */
-    const sPoint_t *points;     /**< Borrowed array managed by the sensor object */
-    bool            isNew;      /**< ID differs from last successful frame */
-    bool            valid;      /**< Complete protocol validation passed */
-  } sFrame_t;
-
-  /** @struct sConfig_t
-   *  @brief Actual firmware configuration returned by CONFIG?.
-   */
-  typedef struct {
-    eMeasurementMode_t mode;       /**< Resolution/preset */
-    uint8_t            peakCount;  /**< One to preset maximum */
-    uint8_t            reportMode; /**< Raw REPORT field; operation requires zero */
-    eOutputMode_t      outputMode; /**< FRAME, POINT or LINE */
-    int16_t            x;          /**< Original pixel column, otherwise -1 */
-    int16_t            y;          /**< Original row, otherwise -1 */
-    eBaudRate_t        baudRate;   /**< Validated supported rate */
-  } sConfig_t;
-
   /**
    * @fn DFRobot_TMF8829
    * @brief Store the injected serial port and initial UART settings.
@@ -111,7 +127,10 @@ public:
    */
   DFRobot_TMF8829(HardwareSerial *serial, eBaudRate_t baudRate = eBaudRate115200, int8_t rxPin = -1, int8_t txPin = -1);
 
-  /** @brief Release internally allocated point storage; the UART remains borrowed. */
+  /**
+   * @fn ~DFRobot_TMF8829
+   * @brief Release internally allocated point storage; the UART remains borrowed.
+   */
   ~DFRobot_TMF8829();
   DFRobot_TMF8829(const DFRobot_TMF8829 &) = delete;
   DFRobot_TMF8829 &operator=(const DFRobot_TMF8829 &) = delete;
@@ -166,7 +185,7 @@ public:
   bool setPeakCount(uint8_t peakCount);
 
   /**
-   * @fn setMeasureMode(uint8_t, uint8_t)
+   * @fn setMeasureMode
    * @brief Select one original-image pixel for POINT output.
    * @param x Zero-based original column, less than preset width.
    * @param y Zero-based original row, less than preset height.
@@ -177,7 +196,7 @@ public:
   bool setMeasureMode(uint8_t x, uint8_t y);
 
   /**
-   * @fn setMeasureMode(uint8_t)
+   * @fn setMeasureMode
    * @brief Select one original-image row for LINE output.
    * @param y Zero-based original row, less than preset height.
    * @n Output is preset width x 1 with all peaks. Cache y is 0; XYZ is not translated.
@@ -187,7 +206,7 @@ public:
   bool setMeasureMode(uint8_t y);
 
   /**
-   * @fn setMeasureMode(void)
+   * @fn setMeasureMode
    * @brief Restore full FRAME output at the current resolution.
    * @n Clears frame validity; does not change preset/peak count or save configuration.
    * @return true on command and verification success.
@@ -272,14 +291,21 @@ public:
    */
   bool isDataValid(void) const;
 
-private:
+  /**
+   * @fn getTiming
+   * @brief Return timings of the latest update, including failed attempts.
+   * @return Timing snapshot in microseconds. Flags indicate which stages occurred.
+   */
+  const sTiming_t &getTiming(void) const;
+
+protected:
   bool openSerial(void);
   bool send(const char *command);
   bool transact(const char *command, uint32_t timeoutMs, uint8_t query = 0);
   bool prepare(void);
   bool ensureConfig(void);
   bool change(const char *command, uint32_t timeoutMs = TMF8829_AT_TIMEOUT);
-  bool poll(uint8_t &event);
+  bool poll(uint8_t &event, uint32_t *firstByteUs = NULL);
   bool feed(uint8_t value, uint8_t &event);
   bool inspect(uint8_t &event);
   void resync(void);
@@ -296,6 +322,11 @@ private:
   bool frameMatches(void) const;
   void publish(void);
 
+private:
+  uint8_t          _rxBatch[512];
+  size_t           _rxOffset;
+  size_t           _rxCount;
+  sTiming_t        _timing;
   HardwareSerial * _pSerial;
   sPoint_t *       _pBuffer;
   size_t           _capacity;

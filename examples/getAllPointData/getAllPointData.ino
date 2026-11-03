@@ -21,10 +21,11 @@
 #include <DFRobot_TMF8829.h>
 #include <stdio.h>
 
-const DFRobot_TMF8829::eBaudRate_t sensorBaud = DFRobot_TMF8829::eBaudRate921600;
+// Set to 1 to print every point; set to 0 to print only the frame summary.
+const eBaudRate_t sensorBaud = eBaudRate5000000;
 // Peaks per pixel: 8/16 presets support 1..4, 32 presets 1..3, 48 presets 1..2.
-const uint8_t PEAK_COUNT = 1;
-DFRobot_TMF8829 tmf8829(&Serial1, sensorBaud, /*RX pin*/25, /*TX pin*/26);
+const uint8_t PEAK_COUNT = 2;
+DFRobot_TMF8829 tmf8829(&Serial1, sensorBaud, /*RX pin*/38, /*TX pin*/37);
 // Point storage is managed automatically by the library.
 
 void require(bool ok, const char *step)
@@ -35,7 +36,7 @@ void require(bool ok, const char *step)
   while (true) delay(1000);
 }
 
-void printPoint(uint16_t pixel, uint8_t peak, const DFRobot_TMF8829::sPoint_t &p)
+void printPoint(uint16_t pixel, uint8_t peak, const sPoint_t &p)
 {
   char row[80];
   snprintf(row, sizeof(row), "%5u | %4u | %6d | %6d | %6d | %6u | %10u",
@@ -49,10 +50,15 @@ void printPoint(uint16_t pixel, uint8_t peak, const DFRobot_TMF8829::sPoint_t &p
 void setup()
 {
   Serial.begin(115200);
-  require(tmf8829.begin(), "begin: check wiring and current device baud");
-  require(tmf8829.setSensorMode(DFRobot_TMF8829::eMode48X32), "48X32");
+  if (!tmf8829.begin()) {
+    Serial.println("Sensor init failed, check TX/RX wiring, power supply and baud rate");
+    while (true) delay(1000);
+  }
+  Serial.println("Sensor init Success");
+  require(tmf8829.setSensorMode(eMode48X32), "48X32");
   require(tmf8829.setPeakCount(PEAK_COUNT), "setPeakCount");
   require(tmf8829.setMeasureMode(), "FRAME");
+  delay(1000);
 }
 
 void loop()
@@ -62,7 +68,7 @@ void loop()
     delay(500);
     return;
   }
-  const DFRobot_TMF8829::sFrame_t &frame = tmf8829.getAllPointData();
+  const sFrame_t &frame = tmf8829.getAllPointData();
   Serial.println();
   Serial.print("Frame: ");
   Serial.print(frame.frameId);
@@ -86,5 +92,5 @@ void loop()
       printPoint(pixel, peak, frame.points[index]);
     }
   }
-  delay(500);
+  delay(100);
 }

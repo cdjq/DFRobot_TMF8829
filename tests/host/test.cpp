@@ -9,6 +9,7 @@
 static uint32_t now = 0;
 static std::function<void()> tick;
 uint32_t millis() { return now; }
+uint32_t micros() { return now * 1000UL; }
 void delay(uint32_t ms) { now += ms; if (tick) tick(); }
 using Sensor = DFRobot_TMF8829;
 static uint16_t crc(const std::vector<uint8_t> &v, size_t start, size_t end) {
@@ -88,7 +89,7 @@ int main() {
     Device device;
     device.port.begin(115200);
     device.baud = 2000000;
-    Sensor tmf8829(&device.port, Sensor::eBaudRate2000000, 25, 26);
+    Sensor tmf8829(&device.port, eBaudRate2000000, 25, 26);
     assert(tmf8829.begin());
     assert(device.port.beginCount == 2);
     assert(device.port.rxBufferSize == 32768);
@@ -110,7 +111,7 @@ int main() {
     Device retry;
     retry.reportErrors=failures;
     Sensor tmf8829(&retry.port);
-    Sensor::sPoint_t buffer[1];
+    sPoint_t buffer[1];
     assert(tmf8829.setFrameBuffer(buffer,1));
     assert(tmf8829.begin()==(failures<3));
     assert(retry.reportAttempts==std::min(failures+1,3));
@@ -119,19 +120,74 @@ int main() {
     Device retry;
     retry.reportTimeouts=failures;
     Sensor tmf8829(&retry.port);
-    Sensor::sPoint_t buffer[1];
+    sPoint_t buffer[1];
     assert(tmf8829.setFrameBuffer(buffer,1));
     assert(tmf8829.begin()==(failures<3));
     assert(retry.reportAttempts==std::min(failures+1,3));
   }
+  // Timing separates delayed first byte from the remaining frame, then resets.
+  {
+    Device device;
+    Sensor sensor(&device.port);
+    assert(sensor.begin());
+    auto bytes = device.data();
+    uint32_t requested = 0;
+    bool first = false, rest = false;
+    device.get = [&] {
+      requested = now;
+      tick = [&] {
+        if (!first && uint32_t(now - requested) >= 7) {
+          device.port.rx.push_back(bytes[0]); first = true;
+        }
+        if (!rest && uint32_t(now - requested) >= 18) {
+          device.port.push(std::vector<uint8_t>(bytes.begin() + 1, bytes.end())); rest = true;
+        }
+      };
+    };
+    assert(sensor.update(100));
+    tick = {};
+    const auto timing = sensor.getTiming();
+    assert(timing.requestStarted && timing.receivedFirstByte && timing.frameComplete);
+    assert(timing.firstByte == 0xaa);
+    assert(timing.receivedSecondByte && timing.secondByte == 0x55);
+    assert(timing.waitFirstByteUs == 7000 && timing.receiveUs == 11000);
+    assert(timing.totalUs == timing.prepareUs + timing.waitFirstByteUs + timing.receiveUs);
+    device.get = [] {};
+    assert(!sensor.update(20));
+    assert(sensor.getTiming().requestStarted && !sensor.getTiming().receivedFirstByte);
+    assert(!sensor.getTiming().frameComplete && sensor.getTiming().receiveUs == 0);
+    assert(sensor.getTiming().waitFirstByteUs == 20000);
+    assert(!sensor.getTiming().receivedSecondByte);
+    assert(!sensor.update(0));
+    assert(!sensor.getTiming().requestStarted && sensor.getTiming().waitFirstByteUs == 0);
+  }
+  // A full 48x32 frame uses 28 bulk reads, preserving a trailing AT reply.
+  {
+    struct Probe : Sensor {
+      explicit Probe(HardwareSerial *port) : Sensor(port) {}
+      using Sensor::poll;
+    };
+    Device device;
+    Probe sensor(&device.port);
+    assert(sensor.begin() && sensor.setSensorMode(eMode48X32));
+    device.get = [&] { device.port.push(device.data()); device.port.push("\r\nOK\r\n"); };
+    device.port.bulkReads = device.port.singleReads = device.port.maxBulkRead = 0;
+    assert(sensor.update());
+    checkPoints(sensor);
+    assert(device.port.bulkReads == 28 && device.port.singleReads == 0);
+    assert(device.port.maxBulkRead == 512);
+    uint8_t event = 0;
+    assert(sensor.poll(event) && event == 1);
+    assert(!sensor.poll(event));
+  }
   // Default storage supports every preset and peak count without user arrays.
   Device automatic;
-  Sensor::sPoint_t borrowed[4];
+  sPoint_t borrowed[4];
   {
     Sensor tmf8829(&automatic.port);
     assert(tmf8829.begin());
     for (int mode=0; mode<9; ++mode) {
-      assert(tmf8829.setSensorMode(Sensor::eMeasurementMode_t(mode)));
+      assert(tmf8829.setSensorMode(eMeasurementMode_t(mode)));
       assert(tmf8829.setPeakCount(automatic.width()==48?2:automatic.width()==32?3:4));
       assert(tmf8829.update()); checkPoints(tmf8829);
     }
@@ -150,7 +206,7 @@ int main() {
     assert(tmf8829.begin() && tmf8829.update()); checkPoints(tmf8829);
   } // Destruction releases automatic storage.
   Device d;
-  struct { uint32_t before; Sensor::sPoint_t p[3072]; uint32_t after; } mem;
+  struct { uint32_t before; sPoint_t p[3072]; uint32_t after; } mem;
   mem.before=0x12345678; mem.after=0x87654321;
   Sensor s(&d.port);
   assert(s.setFrameBuffer(mem.p,3072));
@@ -161,26 +217,26 @@ int main() {
   assert(s.update()); assert(!s.isDataNew());
   d.id=0xffffffff; assert(s.update() && s.isDataNew());
   d.id=0; assert(s.update() && s.isDataNew());
-  Sensor::sPoint_t p{1,2,3,4,5};
+  sPoint_t p{1,2,3,4,5};
   assert(!s.getPointData(8,0,0,p) && p.x==1);
   assert(s.getPointData(7,7,0,p) && p.x==-186);
   for (int mode=0;mode<9;++mode) {
-    assert(s.setSensorMode(Sensor::eMeasurementMode_t(mode)));
+    assert(s.setSensorMode(eMeasurementMode_t(mode)));
     unsigned maxPeak=d.width()==48?2:d.width()==32?3:4;
     assert(s.setPeakCount(maxPeak));
     size_t n=d.port.commands.size(); assert(!s.setPeakCount(maxPeak+1)); assert(d.port.commands.size()==n);
     assert(s.update()); checkPoints(s);
     assert(s.setMeasureMode(2,3)); assert(s.update()); checkPoints(s);
     assert(s.getAllPointData().width==1 && s.getAllPointData().height==1);
-    assert(s.setSensorMode(Sensor::eMeasurementMode_t(mode))); assert(d.select==1 && d.peak==int(maxPeak));
+    assert(s.setSensorMode(eMeasurementMode_t(mode))); assert(d.select==1 && d.peak==int(maxPeak));
     assert(s.setMeasureMode(3)); assert(s.update()); checkPoints(s);
     assert(s.getAllPointData().height==1);
     assert(s.setMeasureMode());
   }
-  assert(s.setSensorMode(Sensor::eMode8X8)); assert(s.setPeakCount(1));
+  assert(s.setSensorMode(eMode8X8)); assert(s.setPeakCount(1));
   size_t n=d.port.commands.size(); assert(!s.setMeasureMode(8,0)); assert(d.port.commands.size()==n);
-  assert(!s.setSensorMode(Sensor::eMeasurementMode_t(90)));
-  Sensor::sConfig_t config; memset(&config,0,sizeof(config)); config.x=99;
+  assert(!s.setSensorMode(eMeasurementMode_t(90)));
+  sConfig_t config; memset(&config,0,sizeof(config)); config.x=99;
   d.omitField=true; assert(!s.getConfig(config) && config.x==99); d.omitField=false;
   assert(s.setPeakCount(2)); assert(s.setPeakCount(1));
   // Fragment every byte, including text-like payload, with millis wraparound.
@@ -233,13 +289,13 @@ int main() {
   d.get=[&] { auto v=d.data(); v[v.size()-4]^=1; d.port.push(v); };
   assert(!s.update(30)); d.get={}; assert(s.update());
   assert(s.saveConfig());
-  assert(s.setBaudRate(Sensor::eBaudRate115200)); assert(d.port.baud==115200);
-  Sensor::eBaudRate_t baud; assert(s.getBaudRate(baud) && baud==Sensor::eBaudRate115200);
+  assert(s.setBaudRate(eBaudRate115200)); assert(d.port.baud==115200);
+  eBaudRate_t baud; assert(s.getBaudRate(baud) && baud==eBaudRate115200);
   assert(s.update());
-  d.failBaud=true; assert(!s.setBaudRate(Sensor::eBaudRate460800)); assert(!s.update());
+  d.failBaud=true; assert(!s.setBaudRate(eBaudRate460800)); assert(!s.update());
   assert(mem.before==0x12345678 && mem.after==0x87654321);
   // Tiny user storage: begin may discard a big active frame, but update rejects it.
-  Device small; struct { Sensor::sPoint_t p[1]; uint32_t guard; } tiny;
+  Device small; struct { sPoint_t p[1]; uint32_t guard; } tiny;
   tiny.guard=0xcafebabe; Sensor t(&small.port); assert(t.setFrameBuffer(tiny.p,1));
   small.port.push(frame(48,32,2)); assert(t.begin()); assert(!t.update());
   assert(tiny.guard==0xcafebabe); assert(t.setMeasureMode(0,0)); assert(t.update());

@@ -6,16 +6,14 @@
 
 ## 产品链接
 
-产品 SKU、销售名称、供电与 UART 电平、图片、最终作者/维护者、仓库和产品链接待确认。保留项目现有 MIT 授权信息，不套用其他产品参数。
+```
+SKU: SEN0773
+```
 
 ## 目录
 
 * [概述](#概述)
 * [库安装](#库安装)
-* [接线](#接线)
-* [AT 指令](#at-指令)
-* [数据与内存](#数据与内存)
-* [示例](#示例)
 * [方法](#方法)
 * [兼容性](#兼容性)
 * [历史](#历史)
@@ -23,28 +21,206 @@
 
 ## 概述
 
-* 硬件 UART，8N1，库默认 115200；需按模块当前波特率构造，初始化切换到 REPORT=0，每次 update 请求一帧。
-* 9 种测量预设；setSensorMode 设置分辨率，setMeasureMode 三个重载选择点、行或全帧。
-* 校验长度、几何尺寸、CRC16/Modbus 和帧尾，保留 signal/confidence 为零的槽位。
-* 库自动管理点数组；切换模式无需修改数组，update 不申请堆内存。
-* 参数使用枚举；不提供主动上报、USB 接入及独立错误枚举。
+使用硬件 UART（8N1），主控以问答方式读取 XYZ 点云。库构造函数默认波特率为 **115200**，固件在没有有效保存配置时的上电默认波特率为 **921600**。六份例程统一显式使用 `eBaudRate921600`；若模块已保存其他速率，请修改例程中的构造参数，与模块当前速率一致。
+
+ESP32 例程使用 `Serial1`，主控 RX 为 **GPIO25**、TX 为 **GPIO26**。模块 TX 接 GPIO25，模块 RX 接 GPIO26，VCC 接 **3.3V**，GND 共地；`Serial` 用于打印结果。
+
+先调用 `begin()`，再按用途设置分辨率、Peak 数量和点/行/全帧输出。调用 `update()` 获取并校验新数据后，通过 `getAllPointData()` 或 `getPointData()` 读取缓存。枚举和结构体在类外定义，例如 `eMode48X32`、`eBaudRate921600` 和 `sPoint_t`，无需类名前缀。库自动管理点数组，切换模式无需修改数组大小。
+
+`getAllPointData` 例程以毫秒打印请求前准备、请求到首字节、接收与解析、`update()` 总耗时及计时报告输出耗时。`getTiming()` 返回最近一次调用的 `sTiming_t` 微秒计时，失败请求也会记录。首字节时间以主控读到字节为准。报告输出耗时包含 `Serial.flush()`，不包含最后的耗时汇总行及点数据表格。
+
+六份例程可按用途独立选择，无需按顺序运行：
+
+* [getAllPointData](./examples/getAllPointData/getAllPointData.ino)：读取并打印整帧点云。
+* [getPointData](./examples/getPointData/getPointData.ino)：通过顶部宏选择单点，读取其全部 Peak。
+* [getLineData](./examples/getLineData/getLineData.ino)：通过顶部宏选择单行。
+* [getConfig](./examples/getConfig/getConfig.ino)：查询实际配置，展示切换预设的影响。
+* [saveConfig](./examples/saveConfig/saveConfig.ino)：在 setup 中保存一次配置到 NVS。
+* [setBaudRate](./examples/setBaudRate/setBaudRate.ino)：从 921600 切换到 115200，并验证模块和主控速率。
 
 ## 库安装
 
 * 将本库放入 Arduino 的 libraries/DFRobot_TMF8829，重新打开 IDE 后选择 examples 中的示例。
 * 若将来发布到库管理器，可搜索 DFRobot_TMF8829 安装；当前不声明已上架。
 
-## 接线
+## 方法
 
-| 模块 | ESP32 |
-| --- | --- |
-| TX | GPIO16（Serial1 RX） |
-| RX | GPIO17（Serial1 TX） |
-| GND | GND |
+### 公开接口
 
-模块供电和 UART 电平待确认，按模块规格核对。示例用 Serial 作调试控制台、Serial1 接传感器，主控引脚可在构造函数修改。
+以下为全部公开接口，类型定义见头文件。
 
-## AT 指令
+```C++
+  /**
+   * @fn DFRobot_TMF8829
+   * @brief 保存硬件串口及初始通信参数，构造时不通信。
+   * @param serial 外部提供的硬件串口对象，不能为空；库不负责销毁。
+   * @param baudRate 模块当前波特率，使用 eBaudRate_t 中的八种枚举值。
+   * @param rxPin ESP32 接收引脚，-1 使用默认引脚。
+   * @param txPin ESP32 发送引脚，-1 使用默认引脚。其他平台忽略引脚参数。
+   */
+  DFRobot_TMF8829(HardwareSerial *serial, eBaudRate_t baudRate = eBaudRate115200, int8_t rxPin = -1, int8_t txPin = -1);
+
+  /**
+   * @fn ~DFRobot_TMF8829
+   * @brief 释放库自动分配的点缓存；串口由调用者管理。
+   */
+  ~DFRobot_TMF8829();
+
+  /**
+   * @fn setFrameBuffer
+   * @brief 可选：用调用者的点数组替换自动缓存，须在空闲时调用。
+   * @param buffer 非空数组，使用期间必须保持有效。
+   * @param capacity 点槽位数量，不是像素数或字节数，必须大于零。
+   * @n 清除帧有效状态并释放此前的内部缓存；不释放用户数组。
+   * @return 绑定成功返回 true。
+   */
+  bool setFrameBuffer(sPoint_t *buffer, size_t capacity);
+
+  /**
+   * @fn begin
+   * @brief 启动串口，强制 REPORT=0，检查 AT 并查询实际配置。
+   * @n 未提供用户数组时自动分配 3072 个点；内存不足时返回 false。
+   * @n 不修改分辨率、空间选择或 NVS；允许使用小缓存。
+   * @return 问答模式及全部配置确认成功返回 true。
+   */
+  bool begin(void);
+
+  /**
+   * @fn getConfig
+   * @brief 查询并校验全部实际配置。
+   * @param config 仅在完全成功时更新。
+   * @n 字段顺序任意，忽略未知字段；失败时配置缓存失效。
+   * @return 全部字段有效且收到最终 OK 时返回 true。
+   */
+  bool getConfig(sConfig_t &config);
+
+  /**
+   * @fn setSensorMode
+   * @brief 设置分辨率预设，并重新查询实际配置。
+   * @param mode 普通预设 eMode8X8、eMode16X16、eMode32X32、eMode48X32。
+   * @n H 系列预设 eModeH8X8、eModeH16X16、eModeH32X32、eModeH48X32；L 系列预设 eModeL8X8。
+   * @n 切换到不同预设会将 Peak 重置为 1、输出重置为 FRAME；相同预设保持原设置。
+   * @n 清除帧有效状态，不自动保存。
+   * @return 命令及配置核对成功返回 true。
+   */
+  bool setSensorMode(eMeasurementMode_t mode);
+
+  /**
+   * @fn setPeakCount
+   * @brief 设置每个像素的槽位数，不自动限幅。
+   * @param peakCount 8/16 预设为 1..4，32 预设为 1..3，48 预设为 1..2。
+   * @n 按实际预设检查参数；清除帧有效状态，不自动保存。
+   * @return 命令及配置核对成功返回 true。
+   */
+  bool setPeakCount(uint8_t peakCount);
+
+  /**
+   * @fn setMeasureMode
+   * @brief 选择原始画面中的一个像素，以 POINT 输出。
+   * @param x 原始列坐标，从零开始，小于预设宽度。
+   * @param y 原始行坐标，从零开始，小于预设高度。
+   * @n 输出为 1x1，包含全部 Peak；缓存坐标为 (0,0)，XYZ 不作平移。
+   * @n 清除帧有效状态，不自动保存。
+   * @return 命令及配置核对成功返回 true。
+   */
+  bool setMeasureMode(uint8_t x, uint8_t y);
+
+  /**
+   * @fn setMeasureMode
+   * @brief 选择原始画面中的一行，以 LINE 输出。
+   * @param y 原始行坐标，从零开始，小于预设高度。
+   * @n 输出为预设宽度 x 1，包含全部 Peak；缓存 y=0，XYZ 不作平移。
+   * @n 清除帧有效状态，不自动保存。
+   * @return 命令及配置核对成功返回 true。
+   */
+  bool setMeasureMode(uint8_t y);
+
+  /**
+   * @fn setMeasureMode
+   * @brief 恢复当前分辨率的 FRAME 全帧输出。
+   * @n 清除帧有效状态；不改变预设或 Peak，不自动保存。
+   * @return 命令及配置核对成功返回 true。
+   */
+  bool setMeasureMode(void);
+
+  /**
+   * @fn getBaudRate
+   * @brief 发送 BAUD? 并校验设备返回的波特率。
+   * @param baudRate 仅在查询完整且收到最终 OK 时更新。
+   * @n 仅接受 eBaudRate_t 中的八种速率，同时更新缓存速率。
+   * @return 完整查询成功返回 true。
+   */
+  bool getBaudRate(eBaudRate_t &baudRate);
+
+  /**
+   * @fn setBaudRate
+   * @brief 没有待处理取帧请求时，同步修改模块和主控的波特率。
+   * @param baudRate eBaudRate_t 中的任意一种速率。
+   * @n 在旧速率收到完整 OK 后切换主控，再用 AT 和 BAUD? 验证。
+   * @n 立即生效，无需重启，不自动保存；失败可能造成两端速率不同步。
+   * @n 按设备已知速率重新创建对象并 begin 恢复，不自动扫描波特率。
+   * @return 确认两端均工作在目标速率时返回 true。
+   */
+  bool setBaudRate(eBaudRate_t baudRate);
+
+  /**
+   * @fn saveConfig
+   * @brief 显式将当前全部配置保存到 NVS。
+   * @n 无需重启；确有需要时在 setup 中调用一次，不要在 loop 中反复保存。
+   * @n 下次上电时，主控应使用已保存的波特率。
+   * @return 收到最终 OK 返回 true。
+   */
+  bool saveConfig(void);
+
+  /**
+   * @fn update
+   * @brief 发送一次 GETFRAME，等待完整有效的响应。
+   * @param timeoutMs 响应超时，单位毫秒，默认 5000。
+   * @n 要求 begin 成功且 REPORT=0；恢复旧请求最多额外等待 5000 ms。
+   * @n 调用时清除 valid/isNew；失败时 pointCount=0，不保留旧数组内容。
+   * @n 长度、几何尺寸、Peak、容量、CRC 和帧尾全部通过后才发布缓存。
+   * @return 完整响应成功返回 true，重复 frameId 也属于成功。
+   */
+  bool update(uint32_t timeoutMs = 5000);
+
+  /**
+   * @fn getAllPointData
+   * @brief 返回最近一次成功 update 写入的缓存引用，不通信。
+   * @n 先调用 update 并检查 valid；索引为 (y * width + x) * peakCount + peak。
+   * @n 保留 confidence 为零的槽位；引用及指针仅在下次更新、配置或缓存变更、对象销毁前有效。
+   * @return 帧元数据及借用的点数组；valid 表示协议有效，不代表每个点的质量。
+   */
+  const sFrame_t &getAllPointData(void) const;
+
+  /**
+   * @fn getPointData
+   * @brief 从有效缓存复制一个点，不通信。
+   * @param x 输出区域的局部列坐标，从零开始。
+   * @param y 输出区域的局部行坐标；POINT 和 LINE 必须为零。
+   * @param peak Peak 索引，从零开始，小于缓存的 peakCount。
+   * @param point 失败时保持原值。
+   * @n 先调用 update；POINT 使用 (0,0)，不是原画面中所选像素的坐标。
+   * @return 缓存有效且所有索引均合法时返回 true。
+   */
+  bool getPointData(uint8_t x, uint8_t y, uint8_t peak, sPoint_t &point) const;
+
+  /**
+   * @fn isDataNew
+   * @brief 读取缓存的新帧标志，不清除标志。
+   * @n 首次成功为新帧；以后比较 ID 是否不同，允许计数回绕。
+   * @return 缓存的 isNew；更新失败或缓存失效后为 false。
+   */
+  bool isDataNew(void) const;
+
+  /**
+   * @fn isDataValid
+   * @brief 读取缓存的整帧协议校验结果。
+   * @n 先调用 update；单点 confidence/signal 不决定协议是否有效。
+   * @return 当前缓存为完整有效帧时返回 true。
+   */
+  bool isDataValid(void) const;
+
+```
 
 ### 上电默认配置
 
@@ -140,7 +316,7 @@ AT+GETFRAME
 
 普通设置生效时不会自动写入 NVS，需要断电保存时显式发送 `AT+SAVE`；当前配置无需重启即可生效。保存新波特率后，下次上电应使用该速率连接，避免在 `loop()` 中反复保存。
 
-## 数据与内存
+### 数据与内存
 
 `sPoint_t` 保存 int16_t 的 x/y/z（毫米）、uint16_t 的 signal 和 uint8_t 的 confidence。`sFrame_t` 包含 width、height、peakCount、frameId、pointCount、points、isNew、valid。`sConfig_t` 包含 mode、peakCount、reportMode、outputMode、x、y、baudRate。完整枚举及字段注释见[头文件](./src/DFRobot_TMF8829.h)。
 
@@ -160,186 +336,6 @@ AT+GETFRAME
 普通 AT 超时 1000 ms，模式/SAVE 为 5000 ms，update 默认 5000 ms。处理旧事务可能额外等待最多 5000 ms。取帧超时后，在旧响应完整到达或收到 ERROR 前不会发送新 GETFRAME；连接无法恢复时，检查线路并按设备已知波特率重新初始化，不自动扫描速率。
 
 setBaudRate 等待旧速率完整 OK，再切换主控并验证 AT/BAUD?。失败可能失步，按设备已知速率重新创建对象并 begin。配置只在显式 saveConfig 时写 NVS，不在 loop 中反复保存；保存新波特率后，下次上电应使用新速率构造。
-
-## 示例
-
-* [getAllPointData](./examples/getAllPointData/getAllPointData.ino)：自动管理缓存、48X32、Peak=1、全帧请求及打印。
-* [getPointData](./examples/getPointData/getPointData.ino)：原画面选点，用局部 (0,0) 读取所有 Peak。
-* [getLineData](./examples/getLineData/getLineData.ino)：原画面选行，局部 y=0。
-* [getConfig](./examples/getConfig/getConfig.ino)：完整配置、Peak 上限和切换模式副作用。
-* [saveConfig](./examples/saveConfig/saveConfig.ino)：只在 setup 中保存一次。
-* [setBaudRate](./examples/setBaudRate/setBaudRate.ino)：空闲时切换两端波特率并验证。
-
-## 方法
-
-以下为全部公开接口，类型定义见头文件。
-
-```C++
-  /**
-   * @fn DFRobot_TMF8829
-   * @brief 保存硬件串口及初始通信参数，构造时不通信。
-   * @param serial 外部提供的硬件串口对象，不能为空；库不负责销毁。
-   * @param baudRate 模块当前波特率，使用 eBaudRate_t 中的八种枚举值。
-   * @param rxPin ESP32 接收引脚，-1 使用默认引脚。
-   * @param txPin ESP32 发送引脚，-1 使用默认引脚。其他平台忽略引脚参数。
-   */
-  DFRobot_TMF8829(HardwareSerial *serial, eBaudRate_t baudRate = eBaudRate115200, int8_t rxPin = -1, int8_t txPin = -1);
-
-  /**
-   * @fn setFrameBuffer
-   * @brief 可选：用调用者的点数组替换自动缓存，须在空闲时调用。
-   * @param buffer 非空数组，使用期间必须保持有效。
-   * @param capacity 点槽位数量，不是像素数或字节数，必须大于零。
-   * @n 清除帧有效状态并释放此前的内部缓存；不释放用户数组。
-   * @return 绑定成功返回 true。
-   */
-  bool setFrameBuffer(sPoint_t *buffer, size_t capacity);
-
-  /**
-   * @fn begin
-   * @brief 启动串口，强制 REPORT=0，检查 AT 并查询实际配置。
-   * @n 未提供用户数组时自动分配 3072 个点；内存不足时返回 false。
-   * @n 不修改分辨率、空间选择或 NVS；允许使用小缓存。
-   * @return 问答模式及全部配置确认成功返回 true。
-   */
-  bool begin(void);
-
-  /**
-   * @fn getConfig
-   * @brief 查询并校验全部实际配置。
-   * @param config 仅在完全成功时更新。
-   * @n 字段顺序任意，忽略未知字段；失败时配置缓存失效。
-   * @return 全部字段有效且收到最终 OK 时返回 true。
-   */
-  bool getConfig(sConfig_t &config);
-
-  /**
-   * @fn setSensorMode
-   * @brief 设置分辨率预设，并重新查询实际配置。
-   * @param mode 普通预设 eMode8X8、eMode16X16、eMode32X32、eMode48X32。
-   * @n H 系列预设 eModeH8X8、eModeH16X16、eModeH32X32、eModeH48X32；L 系列预设 eModeL8X8。
-   * @n 切换到不同预设会将 Peak 重置为 1、输出重置为 FRAME；相同预设保持原设置。
-   * @n 清除帧有效状态，不自动保存。
-   * @return 命令及配置核对成功返回 true。
-   */
-  bool setSensorMode(eMeasurementMode_t mode);
-
-  /**
-   * @fn setPeakCount
-   * @brief 设置每个像素的槽位数，不自动限幅。
-   * @param peakCount 8/16 预设为 1..4，32 预设为 1..3，48 预设为 1..2。
-   * @n 按实际预设检查参数；清除帧有效状态，不自动保存。
-   * @return 命令及配置核对成功返回 true。
-   */
-  bool setPeakCount(uint8_t peakCount);
-
-  /**
-   * @fn setMeasureMode(uint8_t, uint8_t)
-   * @brief 选择原始画面中的一个像素，以 POINT 输出。
-   * @param x 原始列坐标，从零开始，小于预设宽度。
-   * @param y 原始行坐标，从零开始，小于预设高度。
-   * @n 输出为 1x1，包含全部 Peak；缓存坐标为 (0,0)，XYZ 不作平移。
-   * @n 清除帧有效状态，不自动保存。
-   * @return 命令及配置核对成功返回 true。
-   */
-  bool setMeasureMode(uint8_t x, uint8_t y);
-
-  /**
-   * @fn setMeasureMode(uint8_t)
-   * @brief 选择原始画面中的一行，以 LINE 输出。
-   * @param y 原始行坐标，从零开始，小于预设高度。
-   * @n 输出为预设宽度 x 1，包含全部 Peak；缓存 y=0，XYZ 不作平移。
-   * @n 清除帧有效状态，不自动保存。
-   * @return 命令及配置核对成功返回 true。
-   */
-  bool setMeasureMode(uint8_t y);
-
-  /**
-   * @fn setMeasureMode(void)
-   * @brief 恢复当前分辨率的 FRAME 全帧输出。
-   * @n 清除帧有效状态；不改变预设或 Peak，不自动保存。
-   * @return 命令及配置核对成功返回 true。
-   */
-  bool setMeasureMode(void);
-
-  /**
-   * @fn getBaudRate
-   * @brief 发送 BAUD? 并校验设备返回的波特率。
-   * @param baudRate 仅在查询完整且收到最终 OK 时更新。
-   * @n 仅接受 eBaudRate_t 中的八种速率，同时更新缓存速率。
-   * @return 完整查询成功返回 true。
-   */
-  bool getBaudRate(eBaudRate_t &baudRate);
-
-  /**
-   * @fn setBaudRate
-   * @brief 没有待处理取帧请求时，同步修改模块和主控的波特率。
-   * @param baudRate eBaudRate_t 中的任意一种速率。
-   * @n 在旧速率收到完整 OK 后切换主控，再用 AT 和 BAUD? 验证。
-   * @n 立即生效，无需重启，不自动保存；失败可能造成两端速率不同步。
-   * @n 按设备已知速率重新创建对象并 begin 恢复，不自动扫描波特率。
-   * @return 确认两端均工作在目标速率时返回 true。
-   */
-  bool setBaudRate(eBaudRate_t baudRate);
-
-  /**
-   * @fn saveConfig
-   * @brief 显式将当前全部配置保存到 NVS。
-   * @n 无需重启；确有需要时在 setup 中调用一次，不要在 loop 中反复保存。
-   * @n 下次上电时，主控应使用已保存的波特率。
-   * @return 收到最终 OK 返回 true。
-   */
-  bool saveConfig(void);
-
-  /**
-   * @fn update
-   * @brief 发送一次 GETFRAME，等待完整有效的响应。
-   * @param timeoutMs 响应超时，单位毫秒，默认 5000。
-   * @n 要求 begin 成功且 REPORT=0；恢复旧请求最多额外等待 5000 ms。
-   * @n 调用时清除 valid/isNew；失败时 pointCount=0，不保留旧数组内容。
-   * @n 长度、几何尺寸、Peak、容量、CRC 和帧尾全部通过后才发布缓存。
-   * @return 完整响应成功返回 true，重复 frameId 也属于成功。
-   */
-  bool update(uint32_t timeoutMs = 5000);
-
-  /**
-   * @fn getAllPointData
-   * @brief 返回最近一次成功 update 写入的缓存引用，不通信。
-   * @n 先调用 update 并检查 valid；索引为 (y * width + x) * peakCount + peak。
-   * @n 保留 confidence 为零的槽位；引用及指针仅在下次更新、配置或缓存变更、对象销毁前有效。
-   * @return 帧元数据及借用的点数组；valid 表示协议有效，不代表每个点的质量。
-   */
-  const sFrame_t &getAllPointData(void) const;
-
-  /**
-   * @fn getPointData
-   * @brief 从有效缓存复制一个点，不通信。
-   * @param x 输出区域的局部列坐标，从零开始。
-   * @param y 输出区域的局部行坐标；POINT 和 LINE 必须为零。
-   * @param peak Peak 索引，从零开始，小于缓存的 peakCount。
-   * @param point 失败时保持原值。
-   * @n 先调用 update；POINT 使用 (0,0)，不是原画面中所选像素的坐标。
-   * @return 缓存有效且所有索引均合法时返回 true。
-   */
-  bool getPointData(uint8_t x, uint8_t y, uint8_t peak, sPoint_t &point) const;
-
-  /**
-   * @fn isDataNew
-   * @brief 读取缓存的新帧标志，不清除标志。
-   * @n 首次成功为新帧；以后比较 ID 是否不同，允许计数回绕。
-   * @return 缓存的 isNew；更新失败或缓存失效后为 false。
-   */
-  bool isDataNew(void) const;
-
-  /**
-   * @fn isDataValid
-   * @brief 读取缓存的整帧协议校验结果。
-   * @n 先调用 update；单点 confidence/signal 不决定协议是否有效。
-   * @return 当前缓存为完整有效帧时返回 true。
-   */
-  bool isDataValid(void) const;
-
-```
 
 ## 兼容性
 

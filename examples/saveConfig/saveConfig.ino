@@ -2,6 +2,7 @@
  * @file saveConfig.ino
  * @brief Explicit one-time NVS save followed by request/response measurements.
  * @details ESP32 hardware UART example; see the connection table below.
+ * @n Starts at 921600 baud; use the module current saved rate if different.
  * @n Serial prints results; Serial1 connects to the sensor. UART is 8N1.
  * @copyright Copyright (c) 2026 DFRobot Co.Ltd (http://www.dfrobot.com)
  * @license The MIT License (MIT)
@@ -20,7 +21,7 @@
 // VCC: 3.3V; UART pins use the module logic level.
 #include <DFRobot_TMF8829.h>
 
-DFRobot_TMF8829 tmf8829(&Serial1, DFRobot_TMF8829::eBaudRate115200, /*RX pin*/25, /*TX pin*/26);
+DFRobot_TMF8829 tmf8829(&Serial1, eBaudRate921600, /*RX pin*/25, /*TX pin*/26);
 
 void require(bool ok, const char *step)
 {
@@ -33,18 +34,23 @@ void require(bool ok, const char *step)
 void setup()
 {
   Serial.begin(115200);
-  require(tmf8829.begin(), "begin: check wiring and current device baud");
-  require(tmf8829.setSensorMode(DFRobot_TMF8829::eMode8X8), "8X8");
+  if (!tmf8829.begin()) {
+    Serial.println("Sensor init failed, check TX/RX wiring, power supply and baud rate");
+    while (true) delay(1000);
+  }
+  Serial.println("Sensor init Success");
+  require(tmf8829.setSensorMode(eMode8X8), "8X8");
   require(tmf8829.setPeakCount(1), "Peak=1");
   require(tmf8829.setMeasureMode(), "FRAME");
   require(tmf8829.saveConfig(), "SAVE"); // Only once in setup, never repeatedly in loop.
   Serial.println("Saved: restored at next power-on; no restart is needed now.");
+  delay(1000);
 }
 
 void loop()
 {
   if (tmf8829.update()) {
-    const DFRobot_TMF8829::sFrame_t &f = tmf8829.getAllPointData();
+    const sFrame_t &f = tmf8829.getAllPointData();
     Serial.print("frameId=");
     Serial.print(f.frameId);
     Serial.print(" slots=");

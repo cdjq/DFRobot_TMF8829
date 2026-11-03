@@ -48,8 +48,9 @@ const uint8_t EVENT_FRAME = 3;
 uint16_t le16(const uint8_t *p) { return uint16_t(p[0]) | (uint16_t(p[1]) << 8); }
 }
 
-DFRobot_TMF8829::DFRobot_TMF8829(HardwareSerial *serial, eBaudRate_t baudRate, int8_t rxPin, int8_t txPin) : _pSerial(serial), _pBuffer(NULL), _capacity(0), _ownsBuffer(false), _baudRate(baudRate), _rxPin(rxPin), _txPin(txPin), _initialized(false), _configValid(false), _pendingFrame(false), _dirty(false), _haveFrameId(false), _lastFrameId(0), _queryMask(0), _queryBad(false), _queryBaud(eBaudRate921600), _baudFound(false), _query(0)
+DFRobot_TMF8829::DFRobot_TMF8829(HardwareSerial *serial, eBaudRate_t baudRate, int8_t rxPin, int8_t txPin) : _rxOffset(0), _rxCount(0), _pSerial(serial), _pBuffer(NULL), _capacity(0), _ownsBuffer(false), _baudRate(baudRate), _rxPin(rxPin), _txPin(txPin), _initialized(false), _configValid(false), _pendingFrame(false), _dirty(false), _haveFrameId(false), _lastFrameId(0), _queryMask(0), _queryBad(false), _queryBaud(eBaudRate921600), _baudFound(false), _query(0)
 {
+  memset(&_timing, 0, sizeof(_timing));
   memset(&_frame, 0, sizeof(_frame));
   memset(&_config, 0, sizeof(_config));
   memset(&_queryConfig, 0, sizeof(_queryConfig));
@@ -287,11 +288,29 @@ bool DFRobot_TMF8829::feed(uint8_t value, uint8_t &event)
   return inspect(event);
 }
 
-bool DFRobot_TMF8829::poll(uint8_t &event)
+bool DFRobot_TMF8829::poll(uint8_t &event, uint32_t *firstByteUs)
 {
-  while (_pSerial->available() > 0) {
-    const int value = _pSerial->read();
-    if (value < 0) break;
+  uint32_t batchReadUs = micros();
+  for (;;) {
+    if (_rxOffset == _rxCount) {
+      const int available = _pSerial->available();
+      if (available <= 0) break;
+      const size_t count = size_t(available) < sizeof(_rxBatch) ? size_t(available) : sizeof(_rxBatch);
+      batchReadUs = micros();
+      // Read only bytes already available; do not wait for a full batch.
+      _rxCount = _pSerial->readBytes(reinterpret_cast<char *>(_rxBatch), count);
+      _rxOffset = 0;
+      if (!_rxCount) break;
+    }
+    const uint8_t value = _rxBatch[_rxOffset++];
+    if (firstByteUs && !_timing.receivedFirstByte) {
+      *firstByteUs = batchReadUs;
+      _timing.firstByte = uint8_t(value);
+      _timing.receivedFirstByte = true;
+    } else if (firstByteUs && !_timing.receivedSecondByte) {
+      _timing.secondByte = uint8_t(value);
+      _timing.receivedSecondByte = true;
+    }
     if (feed(uint8_t(value), event)) return true;
   }
   event = 0;
@@ -377,7 +396,7 @@ bool DFRobot_TMF8829::prepare(void)
   const uint32_t start = millis();
   uint32_t quiet = start;
   do {
-    const bool available = _pSerial->available() > 0;
+    const bool available = _rxOffset < _rxCount || _pSerial->available() > 0;
     uint8_t event = 0;
     if (poll(event)) {
       if (event == EVENT_FRAME || event == EVENT_ERROR) _pendingFrame = false;
@@ -394,7 +413,7 @@ bool DFRobot_TMF8829::prepare(void)
   } while (uint32_t(millis() - start) < TMF8829_CONFIG_TIMEOUT);
   // A missing tail can never complete. Allow recovery only after a quiet gap,
   // so a response that is still arriving is not cut off by the deadline.
-  if (!_pSerial->available() && uint32_t(millis() - quiet) >= 100) {
+  if (_rxOffset == _rxCount && !_pSerial->available() && uint32_t(millis() - quiet) >= 100) {
     resetParser();
     _pendingFrame = false;
     _dirty = false;
@@ -629,32 +648,51 @@ void DFRobot_TMF8829::publish(void)
 
 bool DFRobot_TMF8829::update(uint32_t timeoutMs)
 {
+  const uint32_t enteredUs = micros();
+  uint32_t requestUs = enteredUs, firstByteUs = enteredUs;
+  memset(&_timing, 0, sizeof(_timing));
+  const auto finish = [&](bool valid) -> bool {
+    const uint32_t finishedUs = micros();
+    _timing.totalUs = uint32_t(finishedUs - enteredUs);
+    if (!_timing.requestStarted) _timing.prepareUs = _timing.totalUs;
+    if (_timing.receivedFirstByte) {
+      _timing.waitFirstByteUs = uint32_t(firstByteUs - requestUs);
+      _timing.receiveUs = uint32_t(finishedUs - firstByteUs);
+    } else if (_timing.requestStarted) {
+      _timing.waitFirstByteUs = uint32_t(finishedUs - requestUs);
+    }
+    _timing.frameComplete = valid;
+    return valid;
+  };
   invalidate();
-  if (!timeoutMs) return false;
-  if (!ensureConfig()) return false;
-  if (!prepare()) return false;
-  if (!send("AT+GETFRAME")) return false;
+  if (!timeoutMs || !ensureConfig() || !prepare()) return finish(false);
+  requestUs = micros();
+  _timing.prepareUs = uint32_t(requestUs - enteredUs);
+  _timing.requestStarted = true;
+  if (!send("AT+GETFRAME")) return finish(false);
   _pendingFrame = true;
   const uint32_t start = millis();
   do {
     uint8_t event = 0;
-    if (poll(event)) {
-      if (event == EVENT_ERROR) { _pendingFrame = false; return false; }
+    if (poll(event, &firstByteUs)) {
+      if (event == EVENT_ERROR) { _pendingFrame = false; return finish(false); }
       if (event == EVENT_FRAME) {
         _pendingFrame = false;
         const bool valid = frameMatches();
         if (valid) publish();
         resetParser();
-        return valid;
+        return finish(valid);
       }
     }
     delay(1);
   } while (uint32_t(millis() - start) < timeoutMs);
 
-  return false;
+  return finish(false);
 }
 
-const DFRobot_TMF8829::sFrame_t &DFRobot_TMF8829::getAllPointData(void) const { return _frame; }
+const sTiming_t &DFRobot_TMF8829::getTiming(void) const { return _timing; }
+
+const sFrame_t &DFRobot_TMF8829::getAllPointData(void) const { return _frame; }
 bool DFRobot_TMF8829::isDataNew(void) const { return _frame.isNew; }
 bool DFRobot_TMF8829::isDataValid(void) const { return _frame.valid; }
 
