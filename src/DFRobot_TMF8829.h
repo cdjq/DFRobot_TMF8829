@@ -120,12 +120,12 @@ public:
    * @fn DFRobot_TMF8829
    * @brief Store the injected serial port and initial UART settings.
    * @param serial Borrowed hardware UART; null makes begin fail.
-   * @param baudRate Current module rate: any eBaudRate_t value listed above.
+   * @param baudRate Current module rate: any eBaudRate_t value listed above; defaults to 921600.
    * @param rxPin ESP32 host RX pin; -1 uses the board default.
    * @param txPin ESP32 host TX pin; -1 uses the board default.
    * @n Construction performs no communication and does not own the UART.
    */
-  DFRobot_TMF8829(HardwareSerial *serial, eBaudRate_t baudRate = eBaudRate115200, int8_t rxPin = -1, int8_t txPin = -1);
+  DFRobot_TMF8829(HardwareSerial *serial, eBaudRate_t baudRate = eBaudRate921600, int8_t rxPin = -1, int8_t txPin = -1);
 
   /**
    * @fn ~DFRobot_TMF8829
